@@ -26,42 +26,71 @@ import os
 import sys
 import logging as log
 from openvino.inference_engine import IENetwork, IECore
-
+CPU_EXTENSION = "/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so"
 
 class Network:
     """
-    Load and configure inference plugins for the specified target devices 
+    Load and configure inference plugins for the specified target devices
     and performs synchronous and asynchronous modes for the specified infer requests.
     """
 
     def __init__(self):
         ### TODO: Initialize any class variables desired ###
+        self.plugin = None
+        self.network = None
+        self.input_blob = None
+        self.output_blob = None
+        self.exec_network = None
+        self.infer_request_handle = None
 
-    def load_model(self):
+    def load_model(self, model, device='CPU', cpu_extension=CPU_EXTENSION):
+
         ### TODO: Load the model ###
+        model_xml = model
+        model_bin = os.path.splitext(model_xml)[0] + ".bin"
+
+        self.plugin = IECore()
+        self.network = IENetwork(model=model_xml, weights=model_bin)
+
         ### TODO: Check for supported layers ###
+        supported_layers = self.plugin.query_network(network=self.network, device_name="CPU")
+        unsupported_layers = [l for l in self.network.layers.keys() if l not in supported_layers]
+
         ### TODO: Add any necessary extensions ###
+        if cpu_extension and "CPU" in device and len(unsupported_layers) != 0:
+            self.plugin.add_extension(extension_path=CPU_EXTENSION, device_name="CPU")
         ### TODO: Return the loaded inference plugin ###
         ### Note: You may need to update the function parameters. ###
+        self.exec_network = self.plugin.load_network(self.network, device)
+
+        self.input_blob = next(iter(self.network.inputs))
+        self.output_blob = next(iter(self.network.outputs))
+
         return
 
     def get_input_shape(self):
         ### TODO: Return the shape of the input layer ###
-        return
+        input_shapes = {}
+        for inpt in self.network.inputs:
+            input_shapes[inpt] = (self.network.inputs[inpt].shape)
+        return input_shapes
 
-    def exec_net(self):
+    def exec_net(self, request_id, net_input):
         ### TODO: Start an asynchronous request ###
         ### TODO: Return any necessary information ###
         ### Note: You may need to update the function parameters. ###
+        self.infer_request_handle = self.exec_network.start_async(request_id, inputs=net_input)
         return
 
     def wait(self):
         ### TODO: Wait for the request to be complete. ###
         ### TODO: Return any necessary information ###
         ### Note: You may need to update the function parameters. ###
-        return
+        status = self.infer_request_handle.wait()
+        return status
 
     def get_output(self):
         ### TODO: Extract and return the output results
         ### Note: You may need to update the function parameters. ###
-        return
+        return self.infer_request_handle.outputs[self.output_blob]
+
