@@ -1,5 +1,10 @@
 # Deploy a People Counter App at the Edge
 
+### Original model: `http://download.tensorflow.org/models/object_detection/ssd_inception_v2_coco_2018_01_28.tar.gz`
+### Commands to convert:
+```
+python main.py -i resources/Pedestrian_Detect_2_1_1.mp4 -m ssd_inception_v2_coco_2018_01_28/frozen_inference_graph.xml -l /opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so -d CPU -pt 0.4 | ffmpeg -v warning -f rawvideo -pixel_format bgr24 -video_size 768x432 -framerate 24 -i - http://0.0.0.0:3004/fac.ffm
+```
 | Details            |              |
 |-----------------------|---------------|
 | Programming Language: |  Python 3.5 or 3.6 |
@@ -33,8 +38,8 @@ You will choose a model to use and convert it with the Model Optimizer.
 *   Npm v3.10.10
 *   CMake
 *   MQTT Mosca server
-  
-        
+
+
 ## Setup
 
 ### Install Intel® Distribution of OpenVINO™ toolkit
@@ -57,10 +62,10 @@ Utilize the classroom workspace, or refer to the relevant instructions for your 
 
 There are three components that need to be running in separate terminals for this application to work:
 
--   MQTT Mosca server 
+-   MQTT Mosca server
 -   Node.js* Web server
 -   FFmpeg server
-     
+
 From the main directory:
 
 * For MQTT/Mosca server:
@@ -76,7 +81,7 @@ From the main directory:
   ```
   **Note:** If any configuration errors occur in mosca server or Web server while using **npm install**, use the below commands:
    ```
-   sudo npm install npm -g 
+   sudo npm install npm -g
    rm -rf node_modules
    npm cache clean
    npm config set registry "http://registry.npmjs.org"
@@ -129,7 +134,7 @@ sudo ffserver -f ./ffmpeg/server.conf
 
 ### Step 4 - Run the code
 
-Open a new terminal to run the code. 
+Open a new terminal to run the code.
 
 #### Setup the environment
 
@@ -142,7 +147,7 @@ You should also be able to run the application with Python 3.6, although newer v
 
 #### Running on the CPU
 
-When running Intel® Distribution of OpenVINO™ toolkit Python applications on the CPU, the CPU extension library is required. This can be found at: 
+When running Intel® Distribution of OpenVINO™ toolkit Python applications on the CPU, the CPU extension library is required. This can be found at:
 
 ```
 /opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/
@@ -192,7 +197,7 @@ to run on your local machine, you will need to change the below file:
 webservice/ui/src/constants/constants.js
 ```
 
-The `CAMERA_FEED_SERVER` and `MQTT_SERVER` both use the workspace configuration. 
+The `CAMERA_FEED_SERVER` and `MQTT_SERVER` both use the workspace configuration.
 You can change each of these as follows:
 
 ```

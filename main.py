@@ -27,6 +27,8 @@ import socket
 import json
 import cv2
 
+from random import randint
+
 import logging as log
 import paho.mqtt.client as mqtt
 
@@ -70,12 +72,26 @@ def build_argparser():
 
 def connect_mqtt():
     ### TODO: Connect to the MQTT client ###
-    client = None
-
+    client = mqtt.Client()
+    client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
 
+def draw_boxes(frame, result, args, width, height):
+    '''
+    Draw bounding boxes onto the frame.
+    '''
+    for box in result[0][0]: # Output shape is 1x1x100x7
+        conf = box[2]
+        if conf >= 0.5:
+            xmin = int(box[3] * width)
+            ymin = int(box[4] * height)
+            xmax = int(box[5] * width)
+            ymax = int(box[6] * height)
+            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
+    return frame
 
 def infer_on_stream(args, client):
+    # Create a black image
     """
     Initialize the inference network, stream video to network,
     and output stats and video.
@@ -84,37 +100,110 @@ def infer_on_stream(args, client):
     :param client: MQTT client
     :return: None
     """
+    single_image_mode = False
+
     # Initialise the class
     infer_network = Network()
     # Set Probability threshold for detections
     prob_threshold = args.prob_threshold
 
     ### TODO: Load the model through `infer_network` ###
-
+    infer_network.load_model(
+        args.model,
+        args.device
+        )
     ### TODO: Handle the input stream ###
+    net_input_shape = infer_network.get_input_shape()['image_tensor']
+
+    if args.input == 'CAM':
+        args.input = 0
+    elif args.input.endswith('.png') or args.input.endswith('bmp'):
+        single_image_mode = True
+
+    cap = cv2.VideoCapture(args.input)
+    cap.open(args.input)
+
+    # Grab the shape of the input
+    width = int(cap.get(3))
+    height = int(cap.get(4))
 
     ### TODO: Loop until stream is over ###
-
+    while cap.isOpened():
         ### TODO: Read from the video capture ###
+        flag, frame = cap.read()
+        if not flag:
+            break
 
         ### TODO: Pre-process the image as needed ###
+        p_frame = cv2.resize(frame, (net_input_shape[3], net_input_shape[2]), interpolation = cv2.INTER_AREA)
+        p_frame = p_frame.transpose((2,0,1))
+        p_frame = p_frame.reshape(1, *p_frame.shape)
 
         ### TODO: Start asynchronous inference for specified request ###
+        request_id = 0
+        infer_network.exec_net(request_id, {'image_tensor':p_frame} )
+
+        people_cur = 0 # people in the current frame
+        people_total = 0
+        duration = 0
 
         ### TODO: Wait for the result ###
-
+        if infer_network.wait() == 0:
             ### TODO: Get the results of the inference request ###
-
             ### TODO: Extract any desired stats from the results ###
-
+            result = infer_network.get_output()
             ### TODO: Calculate and send relevant information on ###
             ### current_count, total_count and duration to the MQTT server ###
             ### Topic "person": keys of "count" and "total" ###
             ### Topic "person/duration": key of "duration" ###
 
-        ### TODO: Send the frame to the FFMPEG server ###
+            for box in result[0][0]:
+                conf = box[0]
+                if conf >= prob_threshold:
+                    xmin = int(box[3] * width)
+                    ymin = int(box[4] * height)
+                    xmax = int(box[5] * width)
+                    ymax = int(box[6] * height)
+                    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 3)
+
+                    if xmin < 400 and ymax < 500:
+                        people_cur += 1
+                        people_total += 1
+                        t1 = time.perf_counter()
+
+                        client.publish('person',json.dumps({
+                                        'count': people_cur}))
+
+                    if xmin > 550 and ymax < 400:
+                        t2 = time.perf_counter()
+                        duration += t2 - t1
+
+                        people_cur = 0
+
+                        client.publish('person',json.dumps({
+                                        'count': people_cur}),
+                                    qos=0, retain=False)
+                        client.publish('person/duration', json.dumps({'duration': duration/people_total}))
+
+        ### Send the frame to the FFMPEG server ###
+        frame = cv2.resize(frame, (768, 432))
+        try:
+            sys.stdout.buffer.write(frame)
+            sys.stdout.flush()
+        except BrokenPipeError:
+            # Python flushes standard streams on exit; redirect remaining output
+            # to devnull to avoid another BrokenPipeError at shutdown
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            sys.exit(1)
 
         ### TODO: Write an output image if `single_image_mode` ###
+        if single_image_mode:
+            cv2.imwrite("output_image.jpg", frame)
+            cv2.imshow('frame', frame)
+
+    cap.release()
+    cv2.destroyAllWindows()
 
 
 def main():
