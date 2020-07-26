@@ -26,6 +26,7 @@ import time
 import socket
 import json
 import cv2
+import pprint as pp
 
 from random import randint
 
@@ -64,9 +65,12 @@ def build_argparser():
                              "CPU, GPU, FPGA or MYRIAD is acceptable. Sample "
                              "will look for a suitable plugin for device "
                              "specified (CPU by default)")
-    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.5,
+    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.4,
                         help="Probability threshold for detections filtering"
                         "(0.5 by default)")
+    parser.add_argument("-op", "--output_path", type=str, default="./", help="Specify the outputpath")
+    parser.add_argument("-pc", "--perf_counts", type=bool, help="display performance count", default=True)
+
     return parser
 
 
@@ -76,21 +80,29 @@ def connect_mqtt():
     client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
     return client
 
-def draw_boxes(frame, result, args, width, height):
+def draw_boxes(frame, result, width, height, prob):
     '''
     Draw bounding boxes onto the frame.
     '''
+    current_count = 0
+    duration = 0
     for box in result[0][0]: # Output shape is 1x1x100x7
         conf = box[2]
-        if conf >= 0.5:
+        if conf >= prob:
             xmin = int(box[3] * width)
             ymin = int(box[4] * height)
             xmax = int(box[5] * width)
             ymax = int(box[6] * height)
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
-    return frame
+            frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 5)
+            t1 = time.time()
+            if (430 < (xmin+xmax)/2 < 480) and 180 <= (ymin+ymax)/2 <= 210:
+                duration += time.time() - t1
+            elif (ymin - ymax) < 250 and xmin < 200:
+                current_count += 1
+    return frame, current_count, duration
 
 def infer_on_stream(args, client):
+    print("infer_on_stream...................")
     # Create a black image
     """
     Initialize the inference network, stream video to network,
@@ -126,67 +138,56 @@ def infer_on_stream(args, client):
     # Grab the shape of the input
     width = int(cap.get(3))
     height = int(cap.get(4))
+    people_total = 0
+    duration = 0
+    current_count = 0
+    pre_count = 0
 
-    ### TODO: Loop until stream is over ###
+    initial_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    video_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    out_video = cv2.VideoWriter(os.path.join(args.output_path, 'output_video.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
+
     while cap.isOpened():
-        ### TODO: Read from the video capture ###
         flag, frame = cap.read()
         if not flag:
             break
 
-        ### TODO: Pre-process the image as needed ###
         p_frame = cv2.resize(frame, (net_input_shape[3], net_input_shape[2]), interpolation = cv2.INTER_AREA)
         p_frame = p_frame.transpose((2,0,1))
         p_frame = p_frame.reshape(1, *p_frame.shape)
 
-        ### TODO: Start asynchronous inference for specified request ###
         request_id = 0
+
+        t0 = time.time()
         infer_network.exec_net(request_id, {'image_tensor':p_frame} )
 
-        people_cur = 0 # people in the current frame
-        people_total = 0
-        duration = 0
-
-        ### TODO: Wait for the result ###
         if infer_network.wait() == 0:
-            ### TODO: Get the results of the inference request ###
-            ### TODO: Extract any desired stats from the results ###
+#             if args.perf_counts:
+#                 pp.pprint(infer_network.requests[0].get_perf_counts())
+            t1 = time.time() - t0 #inference time
             result = infer_network.get_output()
-            ### TODO: Calculate and send relevant information on ###
-            ### current_count, total_count and duration to the MQTT server ###
-            ### Topic "person": keys of "count" and "total" ###
-            ### Topic "person/duration": key of "duration" ###
+            frame, current_count, duration_ = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
 
-            for box in result[0][0]:
-                conf = box[0]
-                if conf >= prob_threshold:
-                    xmin = int(box[3] * width)
-                    ymin = int(box[4] * height)
-                    xmax = int(box[5] * width)
-                    ymax = int(box[6] * height)
-                    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 3)
+            if current_count > pre_count:
+                people_total = people_total + current_count - pre_count
+            else:
+                duration += duration_
 
-                    if xmin < 400 and ymax < 500:
-                        people_cur += 1
-                        people_total += 1
-                        t1 = time.perf_counter()
+            if people_total > 0:
+                client.publish("person/duration", json.dumps({"duration": duration/people_total}))
+                client.publish("person", json.dumps({"count": current_count, "total": people_total}))
 
-                        client.publish('person',json.dumps({
-                                        'count': people_cur}))
+            pre_count = current_count
+            out_video.write(frame)
 
-                    if xmin > 550 and ymax < 400:
-                        t2 = time.perf_counter()
-                        duration += t2 - t1
-
-                        people_cur = 0
-
-                        client.publish('person',json.dumps({
-                                        'count': people_cur}),
-                                    qos=0, retain=False)
-                        client.publish('person/duration', json.dumps({'duration': duration/people_total}))
+            print("current count............................", current_count)
+            print("total...................................", people_total)
 
         ### Send the frame to the FFMPEG server ###
         frame = cv2.resize(frame, (768, 432))
+
         try:
             sys.stdout.buffer.write(frame)
             sys.stdout.flush()
