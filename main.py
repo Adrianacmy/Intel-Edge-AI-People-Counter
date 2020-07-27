@@ -27,10 +27,8 @@ import socket
 import json
 import cv2
 import pprint as pp
-
-from random import randint
-
 import logging as log
+from random import randint
 import paho.mqtt.client as mqtt
 
 from argparse import ArgumentParser
@@ -42,6 +40,8 @@ IPADDRESS = socket.gethostbyname(HOSTNAME)
 MQTT_HOST = IPADDRESS
 MQTT_PORT = 3001
 MQTT_KEEPALIVE_INTERVAL = 60
+
+logger = log.getLogger()
 
 
 def build_argparser():
@@ -55,6 +55,7 @@ def build_argparser():
                         help="Path to an xml file with a trained model.")
     parser.add_argument("-i", "--input", required=True, type=str,
                         help="Path to image or video file")
+    parser.add_argument("-it", "--input_type", type=str, default="video", help="input type, one of [CAM, video, image]")
     parser.add_argument("-l", "--cpu_extension", required=False, type=str,
                         default=None,
                         help="MKLDNN (CPU)-targeted custom layers."
@@ -65,9 +66,9 @@ def build_argparser():
                              "CPU, GPU, FPGA or MYRIAD is acceptable. Sample "
                              "will look for a suitable plugin for device "
                              "specified (CPU by default)")
-    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.4,
+    parser.add_argument("-pt", "--prob_threshold", type=float, default=0.7,
                         help="Probability threshold for detections filtering"
-                        "(0.5 by default)")
+                        "(0.7 by default)")
     parser.add_argument("-op", "--output_path", type=str, default="./", help="Specify the outputpath")
     parser.add_argument("-pc", "--perf_counts", type=bool, help="display performance count", default=True)
 
@@ -85,7 +86,8 @@ def draw_boxes(frame, result, width, height, prob):
     Draw bounding boxes onto the frame.
     '''
     current_count = 0
-    duration = 0
+    false_positive = 0
+    xmax = 0
     for box in result[0][0]: # Output shape is 1x1x100x7
         conf = box[2]
         if conf >= prob:
@@ -93,16 +95,16 @@ def draw_boxes(frame, result, width, height, prob):
             ymin = int(box[4] * height)
             xmax = int(box[5] * width)
             ymax = int(box[6] * height)
-            frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 0, 255), 5)
-            t1 = time.time()
-            if (430 < (xmin+xmax)/2 < 480) and 180 <= (ymin+ymax)/2 <= 210:
-                duration += time.time() - t1
-            elif (ymin - ymax) < 250 and xmin < 200:
-                current_count += 1
-    return frame, current_count, duration
+            frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 3)
+            current_count += 1
+        else:
+            false_positive += 1
+
+    return frame, current_count, false_positive, xmax
+
+
 
 def infer_on_stream(args, client):
-    print("infer_on_stream...................")
     # Create a black image
     """
     Initialize the inference network, stream video to network,
@@ -116,24 +118,44 @@ def infer_on_stream(args, client):
 
     # Initialise the class
     infer_network = Network()
-    # Set Probability threshold for detections
     prob_threshold = args.prob_threshold
 
     ### TODO: Load the model through `infer_network` ###
+    t3 = time.time()
     infer_network.load_model(
         args.model,
-        args.device
+        args.device,
+        args.cpu_extension
         )
-    ### TODO: Handle the input stream ###
+    logger.info("Time taken to load model.... ", time.time() - t3)
+
     net_input_shape = infer_network.get_input_shape()['image_tensor']
 
-    if args.input == 'CAM':
-        args.input = 0
-    elif args.input.endswith('.png') or args.input.endswith('bmp'):
+    # webcam
+    input_ = 0
+    cap = None
+    if args.input_type == 'CAM':
+        input_ = 0
+        cap = cv2.VideoCapture()
+        cap.open(input_)
+    elif args.input_type == 'image':
         single_image_mode = True
-
-    cap = cv2.VideoCapture(args.input)
-    cap.open(args.input)
+        input_ = args.input
+        try:
+            cap = cv2.imread(input_)
+            cap.open(input_)
+        except FileNotFoundError:
+            logger.error(" can not locate file {}".format(args.input))
+    elif args.input_type == 'video':
+        input_ = args.input
+        try:
+            cap = cv2.VideoCapture(input_)
+            cap.open(input_)
+        except FileNotFoundError:
+            logger.error(" can not locate file {}".format(args.input))
+    else:
+        logger.warning("Unsurpported input type")
+#     cap.open(input_)
 
     # Grab the shape of the input
     width = int(cap.get(3))
@@ -142,13 +164,16 @@ def infer_on_stream(args, client):
     duration = 0
     current_count = 0
     pre_count = 0
+    t_start = 0.0
 
     initial_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     video_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
-    out_video = cv2.VideoWriter(os.path.join(args.output_path, 'output_video.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
+    out_video = None
 
+    if args.input_type == 'video' or args.input_type == 'CAM':
+        out_video = cv2.VideoWriter(os.path.join(args.output_path, 'output_video.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
     while cap.isOpened():
         flag, frame = cap.read()
         if not flag:
@@ -159,31 +184,44 @@ def infer_on_stream(args, client):
         p_frame = p_frame.reshape(1, *p_frame.shape)
 
         request_id = 0
-
         t0 = time.time()
         infer_network.exec_net(request_id, {'image_tensor':p_frame} )
 
         if infer_network.wait() == 0:
-#             if args.perf_counts:
-#                 pp.pprint(infer_network.requests[0].get_perf_counts())
+            if args.perf_counts:
+                pp.pprint(infer_network.exec_network.requests[0].get_perf_counts())
             t1 = time.time() - t0 #inference time
+            logger.info("Inferece time......... ", t1)
             result = infer_network.get_output()
-            frame, current_count, duration_ = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
-
+            frame, current_count, false_positive, xmax = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
             if current_count > pre_count:
-                people_total = people_total + current_count - pre_count
-            else:
-                duration += duration_
+                t_start = time.time()
+                # 98: it is the proximately frames of false positive, when there is a person, but not detected
+                # 565 is the proximate x when the person leave after the false positive detection,
+                # this value will exclude the extra count when a person is entering the frame
+                if false_positive >= 98 and xmax > 560:
+                    people_total = people_total + current_count - pre_count
 
-            if people_total > 0:
-                client.publish("person/duration", json.dumps({"duration": duration/people_total}))
-                client.publish("person", json.dumps({"count": current_count, "total": people_total}))
+            if current_count < pre_count:
+                duration = time.time() - t_start
+
+            client.publish("person/duration", json.dumps({"duration": duration}))
+            client.publish("person", json.dumps({"count": current_count, "total": people_total}))
 
             pre_count = current_count
-            out_video.write(frame)
+            frame = cv2.putText(frame, "current count {}, total {},/"
+                                "person/duration {}, fp {}, xmax {}".format(current_count, people_total, duration, false_positive, xmax),
+                       (25, 25),
+                       cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 0), 1)
+            if out_video:
+                out_video.write(frame)
+            elif single_image_mode:
+                cv2.imwrite("output_image.jpg", frame)
+            else:
+                continue
 
-            print("current count............................", current_count)
-            print("total...................................", people_total)
+            logger.info("current count..........................%s", current_count)
+            logger.info("total...................................%s", people_total)
 
         ### Send the frame to the FFMPEG server ###
         frame = cv2.resize(frame, (768, 432))
@@ -198,12 +236,9 @@ def infer_on_stream(args, client):
             os.dup2(devnull, sys.stdout.fileno())
             sys.exit(1)
 
-        ### TODO: Write an output image if `single_image_mode` ###
-        if single_image_mode:
-            cv2.imwrite("output_image.jpg", frame)
-            cv2.imshow('frame', frame)
+    if cap:
+        cap.release()
 
-    cap.release()
     cv2.destroyAllWindows()
 
 

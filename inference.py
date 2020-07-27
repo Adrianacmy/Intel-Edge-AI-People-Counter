@@ -26,7 +26,8 @@ import os
 import sys
 import logging as log
 from openvino.inference_engine import IENetwork, IECore
-CPU_EXTENSION = "/opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so"
+
+logger = log.getLogger()
 
 class Network:
     """
@@ -43,7 +44,7 @@ class Network:
         self.exec_network = None
         self.infer_request_handle = None
 
-    def load_model(self, model, device='CPU', cpu_extension=CPU_EXTENSION):
+    def load_model(self, model, device='CPU', cpu_extension=None):
 
         ### TODO: Load the model ###
         model_xml = model
@@ -57,15 +58,16 @@ class Network:
         unsupported_layers = [l for l in self.network.layers.keys() if l not in supported_layers]
 
         ### TODO: Add any necessary extensions ###
-        if cpu_extension and "CPU" in device and len(unsupported_layers) != 0:
-            self.plugin.add_extension(extension_path=CPU_EXTENSION, device_name="CPU")
-        ### TODO: Return the loaded inference plugin ###
-        ### Note: You may need to update the function parameters. ###
-        self.exec_network = self.plugin.load_network(self.network, device)
+        if len(unsupported_layers) != 0:
+            if cpu_extension and "CPU" in device:
+                self.plugin.add_extension(extension_path=cpu_extension, device_name="CPU")
+            else:
+                logger.error("Unsupported layers {}".foramt(unsupported_layers))
+                exit(1)
 
+        self.exec_network = self.plugin.load_network(self.network, device)
         self.input_blob = next(iter(self.network.inputs))
         self.output_blob = next(iter(self.network.outputs))
-
         return
 
     def get_input_shape(self):
