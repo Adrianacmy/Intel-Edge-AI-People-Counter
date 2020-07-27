@@ -8,7 +8,19 @@ In order to convert any custom layer, you have to add extenstions to both the Mo
 
 ## Comparing Model Performance
 
-There are many models in TensorFlow 1 Detection Model Zoo, tested mainly below three, the first one is used in this project
+There are many models in TensorFlow 1 Detection Model Zoo, tested
+  - ssd_inception_v2_coco_2018_01_28,
+  - ssd_mobilenet_v1_coco_2018_01_28
+  - faster_rcnn_inception_v2_coco_2018_01_28 <br>
+The first two can do the job, but there are too many false positive leads to inaccuracy, the third one has segmentation error.<br>After many tries I choosen to go with
+a converted openvino model, person-detection-retail-0013, much higher accuracy an fair latency, after some tunning, confidence threshold 0.58 works good<br><br>
+- person-detection-retail-0013
+  - download it with `./downloader.py -name person-detection-retail-0013 -o path-to-store`
+  - run the app with `python main.py -i resources/Pedestrian_Detect_2_1_1.mp4 -m person-detection-retail-0013/FP16/person-detection-retail-0013.xml -l /opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so -d CPU -pt 0.58 | ffmpeg -v warning -f rawvideo -pixel_format bgr24 -video_size 768x432 -framerate 24 -i - http://0.0.0.0:3004/fac.ffm`
+<pre>
+  Time taken to load model..........  1.1139318943023682
+  Inferenc time...................... 0.10837841033935547
+</pre>
 
 - ssd_inception_v2_coco_2018_01_28
   - download it with
@@ -56,7 +68,7 @@ There are many models in TensorFlow 1 Detection Model Zoo, tested mainly below t
     python /opt/intel/openvino/deployment_tools/model_optimizer/mo.py --input_model faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.pb --tensorflow_object_detection_api_pipeline_config pipeline.config --reverse_input_channels --tensorflow_use_custom_operations_config /opt/intel/openvino/deployment_tools/model_optimizer/extensions/front/tf/faster_rcnn_support.json
   </pre>
 
-
+python main.py -i CAM -m faster_rcnn_inception_v2_coco_2018_01_28/frozen_inference_graph.xml -l /opt/intel/openvino/deployment_tools/inference_engine/lib/intel64/libcpu_extension_sse4.so -d CPU -pt 0.7 | ffmpeg -v warning -f rawvideo -pixel_format bgr24 -video_size 768x432 -framerate 24 -i - http://0.0.0.0:3004/fac.ffm`
 
 
 ## Assess Model Use Cases

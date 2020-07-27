@@ -87,7 +87,6 @@ def draw_boxes(frame, result, width, height, prob):
     '''
     current_count = 0
     false_positive = 0
-    xmax = 0
     for box in result[0][0]: # Output shape is 1x1x100x7
         conf = box[2]
         if conf >= prob:
@@ -97,12 +96,10 @@ def draw_boxes(frame, result, width, height, prob):
             ymax = int(box[6] * height)
             frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 3)
             current_count += 1
-        else:
-            false_positive += 1
+        # else:
+            # false_positive += 1
 
-    return frame, current_count, false_positive, xmax
-
-
+    return frame, current_count
 
 def infer_on_stream(args, client):
     # Create a black image
@@ -129,7 +126,7 @@ def infer_on_stream(args, client):
         )
     logger.info("Time taken to load model.... ", time.time() - t3)
 
-    net_input_shape = infer_network.get_input_shape()['image_tensor']
+    net_input_shape = infer_network.get_input_shape()['data']
 
     # webcam
     input_ = 0
@@ -185,7 +182,7 @@ def infer_on_stream(args, client):
 
         request_id = 0
         t0 = time.time()
-        infer_network.exec_net(request_id, {'image_tensor':p_frame} )
+        infer_network.exec_net(request_id, {'data':p_frame} )
 
         if infer_network.wait() == 0:
             if args.perf_counts:
@@ -193,13 +190,11 @@ def infer_on_stream(args, client):
             t1 = time.time() - t0 #inference time
             logger.info("Inferece time......... ", t1)
             result = infer_network.get_output()
-            frame, current_count, false_positive, xmax = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
+            frame, current_count = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
             if current_count > pre_count:
                 t_start = time.time()
-                # 98: it is the proximately frames of false positive, when there is a person, but not detected
-                # 565 is the proximate x when the person leave after the false positive detection,
-                # this value will exclude the extra count when a person is entering the frame
-                if false_positive >= 98 and xmax > 560:
+                # count one more when the person about to leave, 3.9 aproximatly can exclude the extra count when the person entering
+                if duration >= 3.9 :
                     people_total = people_total + current_count - pre_count
 
             if current_count < pre_count:
@@ -209,10 +204,11 @@ def infer_on_stream(args, client):
             client.publish("person", json.dumps({"count": current_count, "total": people_total}))
 
             pre_count = current_count
-            frame = cv2.putText(frame, "current count {}, total {},/"
-                                "person/duration {}, fp {}, xmax {}".format(current_count, people_total, duration, false_positive, xmax),
-                       (25, 25),
-                       cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 0), 1)
+            frame = cv2.putText(
+                frame,
+                "current count {}, total {}, person/duration {}".format(current_count, people_total, duration),
+                (25, 25),
+                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 0), 1)
             if out_video:
                 out_video.write(frame)
             elif single_image_mode:
