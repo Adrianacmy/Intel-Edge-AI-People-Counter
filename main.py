@@ -70,7 +70,7 @@ def build_argparser():
                         help="Probability threshold for detections filtering"
                         "(0.7 by default)")
     parser.add_argument("-op", "--output_path", type=str, default="./", help="Specify the outputpath")
-    parser.add_argument("-pc", "--perf_counts", type=bool, help="display performance count", default=True)
+    parser.add_argument("-pc", "--perf_counts", type=bool, help="display performance count", default=False)
 
     return parser
 
@@ -101,6 +101,8 @@ def draw_boxes(frame, result, width, height, prob):
 
     return frame, current_count
 
+
+
 def infer_on_stream(args, client):
     # Create a black image
     """
@@ -126,7 +128,7 @@ def infer_on_stream(args, client):
         )
     logger.info("Time taken to load model.... ", time.time() - t3)
 
-    net_input_shape = infer_network.get_input_shape()['data']
+    net_input_shape = infer_network.get_input_shape()[infer_network.input_blob]
 
     # webcam
     input_ = 0
@@ -182,7 +184,7 @@ def infer_on_stream(args, client):
 
         request_id = 0
         t0 = time.time()
-        infer_network.exec_net(request_id, {'data':p_frame} )
+        infer_network.exec_net(request_id, {infer_network.input_blob:p_frame} )
 
         if infer_network.wait() == 0:
             if args.perf_counts:
