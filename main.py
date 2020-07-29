@@ -86,7 +86,6 @@ def draw_boxes(frame, result, width, height, prob):
     Draw bounding boxes onto the frame.
     '''
     current_count = 0
-    false_positive = 0
     for box in result[0][0]: # Output shape is 1x1x100x7
         conf = box[2]
         if conf >= prob:
@@ -96,8 +95,6 @@ def draw_boxes(frame, result, width, height, prob):
             ymax = int(box[6] * height)
             frame = cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 3)
             current_count += 1
-        # else:
-            # false_positive += 1
 
     return frame, current_count
 
@@ -154,7 +151,7 @@ def infer_on_stream(args, client):
             logger.error(" can not locate file {}".format(args.input))
     else:
         logger.warning("Unsurpported input type")
-#     cap.open(input_)
+        exit(1)
 
     # Grab the shape of the input
     width = int(cap.get(3))
@@ -164,6 +161,8 @@ def infer_on_stream(args, client):
     current_count = 0
     pre_count = 0
     t_start = 0.0
+    frame_count = 0
+    frame_ = 0
 
     initial_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -175,6 +174,7 @@ def infer_on_stream(args, client):
         out_video = cv2.VideoWriter(os.path.join(args.output_path, 'output_video.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
     while cap.isOpened():
         flag, frame = cap.read()
+        frame_count += 1
         if not flag:
             break
 
@@ -193,33 +193,35 @@ def infer_on_stream(args, client):
             logger.info("Inferece time......... ", t1)
             result = infer_network.get_output()
             frame, current_count = draw_boxes(frame, result, initial_w, initial_h, prob_threshold)
+
             if current_count > pre_count:
                 t_start = time.time()
-                # count one more when the person about to leave, 3.9 aproximatly can exclude the extra count when the person entering
-                if duration >= 3.9 :
+                # between the first person leave and the second person reach the table, it is about 100 frames
+                if frame_count - frame_ > 100:
                     people_total = people_total + current_count - pre_count
+                    client.publish("person", json.dumps({"total": people_total}))
+                    frame_ = frame_count
 
-            if current_count < pre_count:
+            # a person detected within 6 frames is the same person
+            if current_count < pre_count and frame_count - frame_ > 6:
                 duration = time.time() - t_start
-
-            client.publish("person/duration", json.dumps({"duration": duration}))
-            client.publish("person", json.dumps({"count": current_count, "total": people_total}))
+                client.publish("person/duration", json.dumps({"duration": duration}))
 
             pre_count = current_count
+            client.publish("person", json.dumps({"count": current_count}))
+
             frame = cv2.putText(
                 frame,
-                "current count {}, total {}, person/duration {}".format(current_count, people_total, duration),
+                "current count {}, total {}, person/duration {}".format(current_count, people_total, round(duration, 2)),
                 (25, 25),
                 cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 255, 0), 1)
+
             if out_video:
                 out_video.write(frame)
             elif single_image_mode:
                 cv2.imwrite("output_image.jpg", frame)
             else:
                 continue
-
-            logger.info("current count..........................%s", current_count)
-            logger.info("total...................................%s", people_total)
 
         ### Send the frame to the FFMPEG server ###
         frame = cv2.resize(frame, (768, 432))
